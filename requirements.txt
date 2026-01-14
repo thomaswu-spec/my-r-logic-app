@@ -4,3 +4,4 @@ supabase
 requests
 plotly
 yfinance
+extra-streamlit-components
