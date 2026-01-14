@@ -11,13 +11,13 @@ supabase: Client = create_client(url, key)
 
 st.set_page_config(page_title="R-Logic Cockpit Pro", layout="wide")
 
-# --- 2. 核心 CSS 樣式 ---
+# --- 2. 核心 CSS 樣式 (解決對齊、大字體、手機單行) ---
 st.markdown("""
     <style>
     /* 加大止蝕止盈數字 */
     .big-price { font-size: 32px !important; font-weight: 800 !important; line-height: 1.1; }
     
-    /* 抓取現價按鈕樣式 - 貼近上方輸入框 */
+    /* 抓取現價按鈕樣式 - 緊貼上方輸入框 */
     div[data-testid="column"] button {
         margin-top: -10px !important;
     }
@@ -99,6 +99,7 @@ if user:
         with r2_c1:
             p_val = st.session_state.get('tmp_p', None)
             pr = st.number_input("進場價", value=p_val, format="%.3f")
+            # 按鈕移到進場價下方
             if tk and st.button("🔍 抓取現價", use_container_width=True):
                 details = get_stock_details(tk)
                 st.session_state['tmp_p'] = details['price']
@@ -111,13 +112,13 @@ if user:
         res = calc_trade_logic(pr, bg, r_pc, r_ratio)
         if res:
             st.divider()
-            # --- 指標顯示 (已調轉：建議股數 | 預期利潤 | 止蝕金額) ---
+            # --- 指標顯示 (左：利潤 | 右：止蝕) ---
             m1, m2, m3 = st.columns(3)
             m1.metric("🔢 建議股數", f"{res['s']:,} 股")
             m2.metric("📈 預期利潤", f"HK$ {res['g']:,.0f}")
             m3.metric("📉 止蝕金額 (1R)", f"HK$ {res['r']:,.0f}")
             
-            # --- 價位顯示 (維持左盈右蝕) ---
+            # --- 價位顯示 (左：止盈 | 右：止蝕) ---
             v_tp, v_sl = st.columns(2)
             with v_tp:
                 st.markdown(f'''<div style="background-color:#dcfce7; padding:15px; border-radius:10px; border-left:5px solid #22c55e;">
@@ -139,9 +140,9 @@ if user:
                     }).execute()
                     st.toast("✅ 紀錄成功！")
                     st.rerun()
-                except Exception as e: st.error(f"存檔出錯: {e}")
+                except Exception as e: st.error(f"存檔失敗：{e}")
 
-    # --- 6. 實時持倉監控 ---
+    # --- 6. 實時持倉監控 (維持單行橫向捲動) ---
     st.divider()
     st.header("📊 持倉實時監控 (Live Monitor)")
     
