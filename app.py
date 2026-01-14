@@ -14,16 +14,16 @@ st.set_page_config(page_title="R-Logic Cockpit Pro", layout="wide")
 # --- 2. 核心 CSS 樣式 (解決對齊、大字體、手機單行) ---
 st.markdown("""
     <style>
-    /* 1. 加大止蝕止盈數字 */
+    /* 加大止蝕止盈數字 */
     .big-price { font-size: 32px !important; font-weight: 800 !important; line-height: 1.1; }
     
-    /* 2. 抓取現價按鈕樣式 - 貼近輸入框 */
-    div[data-testid="column"] button { margin-top: -5px !important; }
+    /* 抓取現價按鈕樣式 - 貼近輸入框 */
+    div[data-testid="column"] button { margin-top: 5px !important; }
 
-    /* 3. 藍色現價 Reference 文字 */
+    /* 藍色現價 Reference 文字 */
     .live-ref-text { font-size: 18px; color: #3498db; font-weight: bold; margin-left: 10px; padding-top: 5px; }
 
-    /* 4. 強制 Live Monitor 保持單行，手機版可橫向捲動 */
+    /* 強制 Live Monitor 保持單行，手機版可橫向捲動 */
     .monitor-wrapper {
         overflow-x: auto;
         white-space: nowrap;
@@ -32,7 +32,7 @@ st.markdown("""
         padding: 10px 0;
     }
     
-    /* 5. 手機版微調 */
+    /* 手機版字體微調 */
     @media (max-width: 640px) {
         .stMetric div { font-size: 18px !important; }
         .big-price { font-size: 24px !important; }
@@ -47,7 +47,7 @@ def get_live_info(ticker):
         formatted = f"{int(ticker):04d}.HK" if ticker.isdigit() else ticker
         stock = yf.Ticker(formatted)
         return {
-            "name": stock.info.get('longName', 'Unknown'),
+            "name": stock.info.get('longName', 'N/A'),
             "price": round(stock.fast_info['last_price'], 3)
         }
     except: return {"name": "N/A", "price": None}
@@ -77,7 +77,7 @@ if st.session_state['user'] is None:
                 supabase.auth.sign_up({"email": email, "password": pw})
                 st.sidebar.success("註冊成功！")
             st.rerun()
-        except: st.sidebar.error("驗證失敗，請檢查輸入")
+        except: st.sidebar.error("驗證失敗")
 else:
     st.sidebar.write(f"當前用戶: {st.session_state['user'].email}")
     if st.sidebar.button("登出帳戶", use_container_width=True):
@@ -102,7 +102,7 @@ if user:
             p_val = st.session_state.get('tmp_p', None)
             pr = st.number_input("💰 進場價格", value=p_val, format="%.3f")
             
-            # 按鈕位執正：擺喺進場價下面
+            # 按鈕位執正 + 現價顯示
             btn_col, ref_col = st.columns([1, 1.5])
             with btn_col:
                 if tk and st.button("🔍 抓取現價", use_container_width=True):
@@ -118,6 +118,7 @@ if user:
         with r2_c3: r_pc = st.number_input("⚠️ 風險 (R %)", value=5.0)
         with r2_c4: r_ratio = st.number_input("🎯 Ratio", value=3.0)
 
+        # 核心計算結果顯示
         res = calc_trade_logic(pr, bg, r_pc, r_ratio)
         if res:
             st.divider()
@@ -149,7 +150,9 @@ if user:
                     }).execute()
                     st.toast("✅ 紀錄成功！")
                     st.rerun()
-                except Exception as e: st.error(f"存檔失敗 (請確保 Supabase 已加 target_price 欄位): {e}")
+                except Exception as e: st.error(f"存檔失敗: {e}")
+        else:
+            st.info("💡 請輸入代號、價格及預算以顯示策劃建議。")
 
     # --- 6. 實時持倉監控 (重點：排版順序) ---
     st.divider()
@@ -194,3 +197,5 @@ if user:
         st.divider()
         st.metric("總未實現盈虧", f"HK$ {total_pl:,.2f}", delta=f"{total_pl:,.2f}")
     else: st.info("目前沒有持倉紀錄。")
+else:
+    st.warning("👈 請在側邊欄登入以開始使用。")
