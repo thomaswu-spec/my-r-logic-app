@@ -12,19 +12,12 @@ supabase: Client = create_client(url, key)
 
 st.set_page_config(page_title="R-Logic Cockpit Pro", layout="wide")
 
-# --- 2. 核心 CSS 樣式 (對齊、大字體、手機單行) ---
+# --- 2. 核心 CSS 樣式 ---
 st.markdown("""
     <style>
-    /* 1. 加大止盈止蝕數字 */
     .big-price { font-size: 32px !important; font-weight: 800 !important; line-height: 1.1; }
-    
-    /* 2. 修正抓取現價按鈕位置，確保不歪位 */
     div[data-testid="column"] button { margin-top: -10px !important; }
-
-    /* 3. 藍色現價參考文字 */
     .live-ref-text { font-size: 18px; color: #3498db; font-weight: bold; margin-left: 10px; padding-top: 5px; }
-
-    /* 4. 強制 Live Monitor 保持單行，手機版可橫向捲動 */
     .monitor-wrapper {
         overflow-x: auto;
         white-space: nowrap;
@@ -32,8 +25,6 @@ st.markdown("""
         width: 100%;
         padding: 10px 0;
     }
-    
-    /* 5. 手機版微調 */
     @media (max-width: 640px) {
         .stMetric div { font-size: 18px !important; }
         .big-price { font-size: 24px !important; }
@@ -45,13 +36,28 @@ st.markdown("""
 @st.cache_data(ttl=60)
 def get_live_info(ticker):
     try:
-        formatted = f"{int(ticker):04d}.HK" if ticker.isdigit() else ticker
+        # 自動識別港股/美股/加密貨幣
+        if ticker.isdigit():
+            formatted = f"{int(ticker):04d}.HK"
+        else:
+            formatted = ticker
+            
         stock = yf.Ticker(formatted)
+        
+        # 修正：改用 history 確保在非開盤時間也能拿到最後收盤價
+        hist = stock.history(period="1d")
+        if not hist.empty:
+            price = hist['Close'].iloc[-1]
+        else:
+            # 備用方案：fast_info
+            price = stock.fast_info.get('last_price', None)
+            
         return {
-            "name": stock.info.get('longName', 'N/A'),
-            "price": round(stock.fast_info['last_price'], 3)
+            "name": stock.info.get('shortName') or stock.info.get('longName') or ticker,
+            "price": round(price, 3) if price else None
         }
-    except: return {"name": "N/A", "price": None}
+    except Exception as e:
+        return {"name": f"Error: {str(e)}", "price": None}
 
 def calc_trade_logic(p, b, r_pc, ra):
     if not p or not b: return None
@@ -66,7 +72,6 @@ def calc_trade_logic(p, b, r_pc, ra):
 cookie_manager = stx.CookieManager()
 if 'user' not in st.session_state: st.session_state['user'] = None
 
-# 嘗試從 Cookie 恢復
 saved_token = cookie_manager.get("sb-access-token")
 if not st.session_state['user'] and saved_token:
     try:
@@ -112,9 +117,8 @@ if user:
         
         r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
         with r2_c1:
-            p_val = st.session_state.get('tmp_p', None)
-            pr = st.number_input("💰 進場價格", value=p_val, format="%.3f")
-            # 「抓取現價」按鈕放置於進場價下方
+            p_val = st.session_state.get('tmp_p', 0.0)
+            pr = st.number_input("💰 進場價格", value=float(p_val) if p_val else 0.0, format="%.3f")
             btn_col, ref_col = st.columns([1, 1.5])
             with btn_col:
                 if tk and st.button("🔍 抓取現價", use_container_width=True):
@@ -126,20 +130,18 @@ if user:
                 if st.session_state.get('tmp_p'):
                     st.markdown(f'<div class="live-ref-text">Ref: {st.session_state["tmp_p"]}</div>', unsafe_allow_html=True)
         
-        with r2_c2: bg = st.number_input("💼 預算 (Budget)", value=None)
+        with r2_c2: bg = st.number_input("💼 預算 (Budget)", value=0.0)
         with r2_c3: r_pc = st.number_input("⚠️ 風險 (R %)", value=5.0)
         with r2_c4: r_ratio = st.number_input("🎯 Ratio", value=3.0)
 
         res = calc_trade_logic(pr, bg, r_pc, r_ratio)
-        if res:
+        if res and pr > 0:
             st.divider()
-            # 指標顯示 (左：利潤 | 右：止蝕)
             m1, m2, m3 = st.columns(3)
             m1.metric("🔢 建議股數", f"{res['s']:,} 股")
             m2.metric("📈 預期利潤", f"HK$ {res['g']:,.0f}")
             m3.metric("📉 止蝕金額 (1R)", f"HK$ {res['r']:,.0f}")
             
-            # 價位顯示大字體 (左：止盈 | 右：止蝕)
             v_tp, v_sl = st.columns(2)
             with v_tp:
                 st.markdown(f'''<div style="background-color:#dcfce7; padding:15px; border-radius:10px; border-left:5px solid #22c55e;">
@@ -165,42 +167,56 @@ if user:
         else:
             st.info("💡 請輸入代號、價格及預算以顯示策劃詳情。")
 
-    # --- 7. 實時持倉監控 (單行顯示 + 排序) ---
+    # --- 7. 實時持倉監控 ---
     st.divider()
     st.header("📊 持倉實時監控 (Live Monitor)")
     db_res = supabase.table("trades").select("*").eq("user_id", user.id).order('purchase_date', desc=True).execute()
     
     if db_res.data:
         st.markdown('<div class="monitor-wrapper">', unsafe_allow_html=True)
-        # 排序：名稱 -> 現價 -> 目標 -> 止蝕 -> 股數 -> 成本 -> 盈虧 -> R 數
-        h = st.columns([1.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1.2, 0.8, 0.4])
-        cols_name = ["股票/名稱", "現價", "目標", "止蝕", "股數", "成本", "盈虧(HKD)", "R 數", ""]
+        # 調整列寬分配
+        h = st.columns([1.5, 0.8, 0.8, 0.8, 0.8, 0.8, 1.2, 0.8, 0.4])
+        cols_name = ["股票/名稱", "現價", "目標", "止蝕", "股數", "成本", "盈虧(HKD)", "R 數", "操作"]
         for col, name in zip(h, cols_name): col.write(f"**{name}**")
         
         total_pl = 0
         for trade in db_res.data:
             info = get_live_info(trade['ticker'])
             lp, en, sl, tp, qty = info['price'], trade['entry_price'], trade['stop_loss'], trade.get('target_price',0), trade['qty']
-            r = st.columns([1.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1.2, 0.8, 0.4])
-            r[0].markdown(f"**{trade['ticker']}**<br><span style='font-size:12px; color:#888;'>{info['name']}</span>", unsafe_allow_html=True)
+            
+            r = st.columns([1.5, 0.8, 0.8, 0.8, 0.8, 0.8, 1.2, 0.8, 0.4])
+            r[0].markdown(f"**{trade['ticker']}**<br><span style='font-size:11px; color:#888;'>{info['name']}</span>", unsafe_allow_html=True)
+            
+            # 修正變量名稱：將原來的 entry_p 改為 en
             if lp:
                 r[1].write(f"**{lp:,.2f}**")
                 r[2].write(f"{tp:,.2f}")
                 r[3].write(f"{sl:,.2f}")
                 r[4].write(f"{qty:,}")
-                r[5].write(f"{entry_p:,.2f}")
+                r[5].write(f"{en:,.2f}") # 這裡修正了 Bug
                 pl = (lp - en) * qty
                 total_pl += pl
                 r[6].markdown(f":{'green' if pl>=0 else 'red'}[${pl:,.1f}]")
                 denom = en - sl
                 r[7].info(f"{(lp-en)/denom if denom!=0 else 0:.2f}R")
+            else:
+                # 如果沒有現價，顯示基礎數據，避免整行空白
+                r[1].write("N/A")
+                r[2].write(f"{tp:,.2f}")
+                r[3].write(f"{sl:,.2f}")
+                r[4].write(f"{qty:,}")
+                r[5].write(f"{en:,.2f}")
+                r[6].write("--")
+                r[7].write("--")
             
             if r[8].button("🗑️", key=f"d_{trade['id']}"):
                 supabase.table("trades").delete().eq("id", trade['id']).execute()
                 st.rerun()
+        
         st.markdown('</div>', unsafe_allow_html=True)
         st.divider()
         st.metric("總未實現盈虧", f"HK$ {total_pl:,.2f}", delta=f"{total_pl:,.2f}")
-    else: st.info("目前沒有持倉紀錄。")
+    else: 
+        st.info("目前沒有持倉紀錄。")
 else:
     st.warning("👈 請在側邊欄登入以開始使用。")
