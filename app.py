@@ -11,13 +11,18 @@ supabase: Client = create_client(url, key)
 
 st.set_page_config(page_title="R-Logic Cockpit Pro", layout="wide")
 
-# --- 2. 核心 CSS 樣式 (解決對齊、大字體、手機單行) ---
+# --- 2. 核心 CSS 樣式 ---
 st.markdown("""
     <style>
-    .big-price { font-size: 30px !important; font-weight: 800 !important; line-height: 1.2; }
-    div[data-testid="column"]:nth-of-type(3) button { margin-top: 31px !important; }
+    /* 加大止蝕止盈數字 */
+    .big-price { font-size: 32px !important; font-weight: 800 !important; line-height: 1.1; }
     
-    /* 強制單行顯示並允許橫向捲動 */
+    /* 抓取現價按鈕樣式 - 貼近上方輸入框 */
+    div[data-testid="column"] button {
+        margin-top: -10px !important;
+    }
+
+    /* 強制 Live Monitor 保持單行，手機版可橫向捲動 */
     .monitor-wrapper {
         overflow-x: auto;
         white-space: nowrap;
@@ -26,17 +31,15 @@ st.markdown("""
         padding: 10px 0;
     }
     
-    /* 加大表格字體 */
-    .monitor-row { font-size: 15px !important; }
-
     @media (max-width: 640px) {
-        div[data-testid="column"]:nth-of-type(3) button { margin-top: 0px !important; }
+        .stMetric div { font-size: 18px !important; }
+        .big-price { font-size: 26px !important; }
     }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 3. 核心功能函數 ---
-@st.cache_data(ttl=3600) # 緩存股票名稱，減少 API 請求
+@st.cache_data(ttl=3600)
 def get_stock_details(ticker):
     try:
         formatted = f"{int(ticker):04d}.HK" if ticker.isdigit() else ticker
@@ -63,7 +66,7 @@ if st.session_state['user'] is None:
     auth_mode = st.sidebar.selectbox("模式", ["登入", "註冊"])
     email = st.sidebar.text_input("Email")
     pw = st.sidebar.text_input("密碼", type="password")
-    if st.sidebar.button("確認"):
+    if st.sidebar.button("確認", use_container_width=True):
         try:
             if auth_mode == "登入":
                 res = supabase.auth.sign_in_with_password({"email": email, "password": pw})
@@ -75,7 +78,7 @@ if st.session_state['user'] is None:
         except: st.sidebar.error("驗證失敗")
 else:
     st.sidebar.write(f"用戶: {st.session_state['user'].email}")
-    if st.sidebar.button("登出"):
+    if st.sidebar.button("登出", use_container_width=True):
         st.session_state['user'] = None
         st.rerun()
 
@@ -86,41 +89,48 @@ if user:
 
     with st.container(border=True):
         st.subheader("📝 交易策劃")
-        c1, c2, c3 = st.columns([1.5, 1.5, 1])
-        with c1: tk = st.text_input("🔍 代號", placeholder="例如: 700").upper()
-        with c2: trade_date = st.date_input("📅 日期", datetime.now())
-        with c3:
+        # 第一排：代號與日期
+        r1_c1, r1_c2 = st.columns(2)
+        with r1_c1: tk = st.text_input("🔍 代號", placeholder="例如: 700").upper()
+        with r1_c2: trade_date = st.date_input("📅 日期", datetime.now())
+        
+        # 第二排：輸入框
+        r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
+        with r2_c1:
+            p_val = st.session_state.get('tmp_p', None)
+            pr = st.number_input("進場價", value=p_val, format="%.3f")
             if tk and st.button("🔍 抓取現價", use_container_width=True):
                 details = get_stock_details(tk)
                 st.session_state['tmp_p'] = details['price']
+                st.rerun()
         
-        p_val = st.session_state.get('tmp_p', None)
-        c4, c5, c6, c7 = st.columns(4)
-        with c4: pr = st.number_input("進場價", value=p_val)
-        with c5: bg = st.number_input("預算 (Budget)", value=None)
-        with c6: r_pc = st.number_input("R %", value=5.0)
-        with c7: r_ratio = st.number_input("Ratio", value=3.0)
+        with r2_c2: bg = st.number_input("預算 (Budget)", value=None)
+        with r2_c3: r_pc = st.number_input("R %", value=5.0)
+        with r2_c4: r_ratio = st.number_input("Ratio", value=3.0)
 
         res = calc_trade_logic(pr, bg, r_pc, r_ratio)
         if res:
             st.divider()
+            # --- 指標顯示 (已調轉：建議股數 | 預期利潤 | 止蝕金額) ---
             m1, m2, m3 = st.columns(3)
-            m1.metric("建議股數", f"{res['s']:,} 股")
-            m2.metric("止蝕金額", f"HK$ {res['r']:,.0f}")
-            m3.metric("預期利潤", f"HK$ {res['g']:,.0f}")
+            m1.metric("🔢 建議股數", f"{res['s']:,} 股")
+            m2.metric("📈 預期利潤", f"HK$ {res['g']:,.0f}")
+            m3.metric("📉 止蝕金額 (1R)", f"HK$ {res['r']:,.0f}")
             
-            r_sl, r_tp = st.columns(2)
-            with r_sl:
-                st.markdown(f'''<div style="background-color:#fee2e2; padding:15px; border-radius:10px; border-left:5px solid #ef4444;">
-                    <span style="color:#b91c1c; font-size:14px;">❌ 止蝕價位</span><br>
-                    <span class="big-price" style="color:#ef4444;">{res['sl']:,.2f}</span>
-                </div>''', unsafe_allow_html=True)
-            with r_tp:
+            # --- 價位顯示 (維持左盈右蝕) ---
+            v_tp, v_sl = st.columns(2)
+            with v_tp:
                 st.markdown(f'''<div style="background-color:#dcfce7; padding:15px; border-radius:10px; border-left:5px solid #22c55e;">
-                    <span style="color:#15803d; font-size:14px;">✅ 止盈價位</span><br>
+                    <span style="color:#15803d; font-size:14px;">✅ 止盈價位 (Target)</span><br>
                     <span class="big-price" style="color:#22c55e;">{res['tp']:,.2f}</span>
                 </div>''', unsafe_allow_html=True)
+            with v_sl:
+                st.markdown(f'''<div style="background-color:#fee2e2; padding:15px; border-radius:10px; border-left:5px solid #ef4444;">
+                    <span style="color:#b91c1c; font-size:14px;">❌ 止蝕價位 (Cut Loss)</span><br>
+                    <span class="big-price" style="color:#ef4444;">{res['sl']:,.2f}</span>
+                </div>''', unsafe_allow_html=True)
             
+            st.write("## ")
             if st.button("📝 紀錄在你的 portfolio", type="primary", use_container_width=True):
                 try:
                     supabase.table("trades").insert({
@@ -129,9 +139,9 @@ if user:
                     }).execute()
                     st.toast("✅ 紀錄成功！")
                     st.rerun()
-                except Exception as e: st.error(f"錯誤: {e}")
+                except Exception as e: st.error(f"存檔出錯: {e}")
 
-    # --- 6. 實時持倉監控 (重新排版) ---
+    # --- 6. 實時持倉監控 ---
     st.divider()
     st.header("📊 持倉實時監控 (Live Monitor)")
     
@@ -139,9 +149,7 @@ if user:
     
     if db_res.data:
         st.markdown('<div class="monitor-wrapper">', unsafe_allow_html=True)
-        
-        # 重新排列標題：股票名稱 -> 現價 -> 目標價 -> 止蝕價 -> 股數 -> 成本 -> 盈虧 -> R 數
-        h = st.columns([1.8, 0.8, 0.8, 0.8, 0.6, 0.8, 1, 0.8, 0.4])
+        h = st.columns([1.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1, 0.8, 0.4])
         cols_name = ["股票 (名稱)", "現價", "目標", "止蝕", "股數", "成本", "盈虧(HKD)", "R 數", ""]
         for col, name in zip(h, cols_name): col.write(f"**{name}**")
         
@@ -151,33 +159,22 @@ if user:
             live_p = details['price']
             entry_p = trade['entry_price']
             sl_p = trade['stop_loss']
-            tp_p = trade.get('target_price', 0) # 獲取目標價
+            tp_p = trade.get('target_price', 0)
             qty = trade['qty']
             
-            r = st.columns([1.8, 0.8, 0.8, 0.8, 0.6, 0.8, 1, 0.8, 0.4])
-            
-            # 1. 股票名稱 + 代號
+            r = st.columns([1.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1, 0.8, 0.4])
             r[0].markdown(f"**{trade['ticker']}**<br><span style='font-size:12px; color:#888;'>{details['name']}</span>", unsafe_allow_html=True)
             
             if live_p:
-                # 2. 現價
                 r[1].write(f"**{live_p:,.2f}**")
-                # 3. 目標價
-                r[2].write(f"{tp_p:,.2f}")
-                # 4. 止蝕價
+                r[2].write(f"{tp_p:,.2f}" if tp_p else "N/A")
                 r[3].write(f"{sl_p:,.2f}")
-                # 5. 股數
                 r[4].write(f"{qty:,}")
-                # 6. 成本
                 r[5].write(f"{entry_p:,.2f}")
-                
-                # 7. 盈虧
                 pl = (live_p - entry_p) * qty
                 total_pl += pl
                 pl_color = "green" if pl >= 0 else "red"
                 r[6].markdown(f":{pl_color}[${pl:,.1f}]")
-                
-                # 8. R 數
                 denom = entry_p - sl_p
                 r_val = (live_p - entry_p) / denom if denom != 0 else 0
                 r[7].info(f"{r_val:.2f}R")
