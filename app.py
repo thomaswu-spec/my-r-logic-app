@@ -11,13 +11,25 @@ supabase: Client = create_client(url, key)
 
 st.set_page_config(page_title="R-Logic Cockpit Pro", layout="wide")
 
-# --- 2. 核心 CSS 樣式 (對齊按鈕與表格) ---
+# --- 2. 核心 CSS 樣式 (針對手機排版與對齊) ---
 st.markdown("""
     <style>
-    /* 強制按鈕對齊輸入框高度 */
-    .stButton > button { margin-top: 28px !important; }
-    /* 保持監控表字體大小 */
-    .monitor-text { font-size: 14px; font-weight: 500; }
+    /* 強制監控表橫向滾動，防止手機版換行 */
+    .monitor-container {
+        overflow-x: auto;
+        white-space: nowrap;
+        width: 100%;
+        border-bottom: 1px solid #444;
+        padding-bottom: 10px;
+    }
+    /* 加大字體與調整按鈕對齊 */
+    .stButton > button { margin-top: 0px !important; width: 100%; }
+    .stMetric label { font-size: 14px !important; }
+    
+    /* 針對手機版微調列間距 */
+    @media (max-width: 640px) {
+        [data-testid="column"] { min-width: 120px !important; }
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -38,7 +50,7 @@ def calc_trade_logic(p, b, r_pc, ra):
     tp_price = p * (1 + (r_pc/100 * ra))
     return {"r_amount": r_amount, "profit_amount": profit_amount, "shares": shares, "sl_price": sl_price, "tp_price": tp_price}
 
-# --- 4. 登入系統 (Sidebar) ---
+# --- 4. 登入系統 (保持穩定) ---
 if 'user' not in st.session_state: st.session_state['user'] = None
 st.sidebar.title("🔐 R-Logic 登入")
 if st.session_state['user'] is None:
@@ -64,35 +76,40 @@ else:
 # --- 5. 主介面邏輯 ---
 user = st.session_state['user']
 if user:
-    st.title(f"🚀 {user.email.split('@')[0]} 的投資指揮中心")
+    st.title(f"🚀 {user.email.split('@')[0]} 投資指揮中心")
 
     with st.container(border=True):
-        st.subheader("📝 交易策劃 (Trade Planner)")
-        # 修正按鈕對齊：將 Ticker, Date, Button 擺喺同一排
+        st.subheader("📝 交易策劃")
+        # 手機版對齊優化：代號、日期、按鈕
         c1, c2, c3 = st.columns([1.5, 1.5, 1])
         with c1: tk = st.text_input("🔍 代號", placeholder="例如: 700").upper()
         with c2: trade_date = st.date_input("📅 日期", datetime.now())
         with c3:
-            # 抓取現價按鈕對齊
-            if tk and st.button("🔍 抓取現價", use_container_width=True):
+            st.write("## ") # 手機版對齊補位
+            if tk and st.button("🔍 抓現價"):
                 st.session_state['tmp_p'] = fetch_live_price(tk)
         
         p_val = st.session_state.get('tmp_p', None)
-        c4, c5, c6, c7 = st.columns(4)
+        c4, c5 = st.columns(2) # 手機版改為 2 欄一組
         with c4: pr = st.number_input("進場價", value=p_val)
-        with c5: bg = st.number_input("預算", value=None)
+        with c5: bg = st.number_input("預算 (Budget)", value=None, help="數字會自動加逗號顯示在下方")
+        
+        c6, c7 = st.columns(2)
         with c6: r_pc = st.number_input("R %", value=5.0)
         with c7: r_ratio = st.number_input("Ratio", value=3.0)
 
         res = calc_trade_logic(pr, bg, r_pc, r_ratio)
         if res:
             st.divider()
-            res_c1, res_c2, res_c3, res_c4, res_c5 = st.columns(5)
-            res_c1.metric("🔢 建議股數", f"{res['shares']} 股")
+            # 顯示計算結果 (加強千分位格式化)
+            res_c1, res_c2, res_c3 = st.columns(3)
+            res_c1.metric("🔢 建議股數", f"{res['shares']:,} 股")
             res_c2.metric("📉 止蝕金額", f"HK$ {res['r_amount']:,.0f}")
             res_c3.metric("📈 預期利潤", f"HK$ {res['profit_amount']:,.0f}")
-            res_c4.error(f"❌ 止蝕價位\n\n**{res['sl_price']:.2f}**")
-            res_c5.success(f"✅ 止盈價位\n\n**{res['tp_price']:.2f}**")
+            
+            res_c4, res_c5 = st.columns(2)
+            res_c4.error(f"❌ 止蝕價位\n\n**{res['sl_price']:,.2f}**")
+            res_c5.success(f"✅ 止盈價位\n\n**{res['tp_price']:,.2f}**")
             
             if st.button("📝 紀錄在你的 portfolio", type="primary", use_container_width=True):
                 try:
@@ -104,16 +121,20 @@ if user:
                     st.rerun()
                 except Exception as e: st.error(f"錯誤: {e}")
 
-    # --- 6. 實時持倉監控 (加回損益計算) ---
+    # --- 6. 實時持倉監控 (手機橫向顯示優化) ---
     st.divider()
     st.header("📊 持倉實時監控 (Live Monitor)")
     
-    db_res = supabase.table("trades").select("*").eq("user_id", user.id).execute()
+    db_res = supabase.table("trades").select("*").eq("user_id", user.id).order('purchase_date', desc=True).execute()
+    
     if db_res.data:
+        # 建立一個可滾動的容器
+        st.markdown('<div class="monitor-container">', unsafe_allow_html=True)
+        
         # 表頭
-        h_cols = st.columns([1, 0.8, 0.8, 0.8, 1, 1.2, 0.8, 0.4])
-        headers = ["日期/代號", "成本", "止蝕", "現價", "股數", "盈虧 (HKD)", "當前 R", ""]
-        for col, head in zip(h_cols, headers): col.write(f"**{head}**")
+        h = st.columns([1.2, 0.8, 0.8, 0.8, 1, 1.2, 0.8, 0.4])
+        cols_name = ["日期/代號", "成本", "止蝕", "現價", "股數", "盈虧 (HKD)", "R 數", ""]
+        for col, name in zip(h, cols_name): col.write(f"**{name}**")
         st.write("---")
 
         total_pl = 0
@@ -123,31 +144,30 @@ if user:
             sl_p = trade['stop_loss']
             qty = trade['qty']
             
-            r_cols = st.columns([1, 0.8, 0.8, 0.8, 1, 1.2, 0.8, 0.4])
-            r_cols[0].write(f"{trade['purchase_date']}\n\n**{trade['ticker']}**")
-            r_cols[1].write(f"{entry_p}")
-            r_cols[2].write(f"{sl_p}")
+            r = st.columns([1.2, 0.8, 0.8, 0.8, 1, 1.2, 0.8, 0.4])
+            r[0].write(f"{trade['purchase_date']}\n\n**{trade['ticker']}**")
+            r[1].write(f"{entry_p:,.2f}")
+            r[2].write(f"{sl_p:,.2f}")
             
             if live_p:
-                r_cols[3].write(f"{live_p}")
-                r_cols[4].write(f"{qty}")
-                # 盈虧計算
+                r[3].write(f"{live_p:,.2f}")
+                r[4].write(f"{qty:,}")
                 pl = (live_p - entry_p) * qty
                 total_pl += pl
                 pl_color = "green" if pl >= 0 else "red"
-                r_cols[5].markdown(f":{pl_color}[${pl:,.1f}]")
-                # R 數計算
+                r[5].markdown(f":{pl_color}[${pl:,.1f}]")
                 denom = entry_p - sl_p
                 r_val = (live_p - entry_p) / denom if denom != 0 else 0
-                r_cols[6].info(f"{r_val:.2f}R")
+                r[6].info(f"{r_val:.2f}R")
             else:
-                r_cols[3].write("...")
+                r[3].write("...")
             
-            if r_cols[7].button("🗑️", key=f"d_{trade['id']}"):
+            if r[7].button("🗑️", key=f"d_{trade['id']}"):
                 supabase.table("trades").delete().eq("id", trade['id']).execute()
                 st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True) # 結束橫向滾動容器
         
         st.divider()
         st.metric("總未實現盈虧", f"HK$ {total_pl:,.2f}", delta=f"{total_pl:,.2f}")
     else: st.info("目前沒有持倉紀錄。")
-else: st.warning("👈 請登入以開始使用。")
