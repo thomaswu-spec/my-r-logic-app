@@ -1,105 +1,104 @@
 import streamlit as st
 import pandas as pd
-import requests
-import plotly.express as px
-import math
+from supabase import create_client, Client
 
-# --- 1. 基礎配置與 API 設定 ---
-API_KEY = "YOUR_API_KEY" # 👈 記得填入你的 ExchangeRate-API Key
+# --- 1. 初始化與連線 ---
+# 確保你的 Secrets 已經填好 SUPABASE_URL 和 SUPABASE_KEY
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
 
-def get_fx_rate(base, target):
-    try:
-        url = f"https://v6.exchangerate-api.com/v6/{API_KEY}/pair/{base}/{target}"
-        response = requests.get(url).json()
-        return response.get('conversion_rate', 7.8)
-    except:
-        return 7.8
+st.set_page_config(page_title="R-Logic Cockpit", layout="wide")
 
-st.set_page_config(page_title="R-Logic Pro", layout="wide")
+# 讀取雲端數據
+def fetch_data():
+    res = supabase.table("trades").select("*").execute()
+    return res.data
 
-# --- 2. 【核心修復】初始化筆記本 ---
-# 這段代碼確保 App 啟動時一定會先建立 trades 清單，避免報錯
-if 'trades' not in st.session_state:
-    st.session_state.trades = []
+st.title("🚀 R-Logic 投資指揮中心")
 
-st.title("🛡️ R-Logic 全能交易管理系統")
+# --- 2. 頂部總覽 (Portfolio Overview) ---
+db_data = fetch_data()
+df = pd.DataFrame(db_data) if db_data else pd.DataFrame()
 
-# --- 3. 側邊欄：全域設定 ---
-with st.sidebar:
-    st.header("⚙️ 全局設定")
-    base_currency = st.selectbox("基準貨幣", ["USD", "HKD"])
-    equity = st.number_input(f"總資產 ({base_currency})", value=10000.0)
-    
-    usd_to_base = get_fx_rate("USD", base_currency) if base_currency == "HKD" else 1.0
-    if base_currency == "HKD":
-        st.caption(f"即時匯率: 1 USD = {usd_to_base:.4f} HKD")
-
-# --- 4. 交易策劃器 (Planner) ---
-st.header("📝 第一步：策劃交易")
-c1, c2, c3, c4 = st.columns(4)
-with c1: ticker = st.text_input("標的代號").upper()
-with c2: mkt_currency = st.selectbox("市場幣別", ["USD", "HKD"])
-with c3: entry = st.number_input("進場價", value=100.0)
-with c4: sl = st.number_input("止蝕價", value=95.0)
-
-# 計算邏輯
-r_in_base = equity * 0.01
-r_in_mkt = r_in_base / usd_to_base if (base_currency == "HKD" and mkt_currency == "USD") else r_in_base
-
-if entry > sl:
-    qty = int(r_in_mkt / (entry - sl))
-    st.success(f"建議股數: {qty} | 預期風險: {mkt_currency} ${r_in_mkt:.2f}")
-    
-    if st.button("➕ 轉為持倉"):
-        st.session_state.trades.append({
-            "Ticker": ticker,
-            "Currency": mkt_currency,
-            "Qty": qty,
-            "Entry": entry,
-            "StopLoss": sl,
-            "Risk_Mkt": r_in_mkt
-        })
-        st.toast(f"{ticker} 已加入持倉！")
-        st.rerun()
-else:
-    st.error("止蝕價須低於進場價")
+m1, m2, m3 = st.columns(3)
+if not df.empty:
+    m1.metric("總持倉數", f"{len(df)} 筆")
+    m2.metric("總未平倉風險", f"HK${df['risk_mkt'].sum():,.0f}")
+    m3.metric("資料庫狀態", "已連線", delta="同步中")
 
 st.divider()
 
-# --- 5. 持倉儀表板 (Dashboard) ---
-st.header("📊 第二步：持倉監控與 R-Distribution")
+# --- 3. 中間層：Excel 風格策劃器 (對標 image_e1be2a.png) ---
+st.subheader("📑 交易場景對比 (Scenario Planner)")
+input_cols = st.columns([1, 2, 2, 2], gap="medium")
 
-if st.session_state.trades:
-    df = pd.DataFrame(st.session_state.trades)
-    
-    updated_trades = []
-    # 使用列來並排顯示現價輸入和 R 數
+# 最左側標籤
+with input_cols[0]:
+    st.write("## ") # 留白對齊
+    st.write("---")
+    st.markdown("**🔍 代號 (Stock)**")
+    st.markdown("**💰 進場價 (Price)**")
+    st.markdown("**💼 預算 (Budget)**")
+    st.markdown("**⚠️ 風險 (R %)**")
+    st.markdown("**🎯 比例 (Ratio)**")
+    st.write("---")
+    st.markdown("🔢 **建議股數**")
+    st.markdown("✅ **目標價 (Target)**")
+    st.markdown("❌ **止蝕價 (SL)**")
+
+# 三個對比場景
+for i in range(1, 4):
+    with input_cols[i]:
+        st.write(f"### 場景 {i}")
+        with st.container(border=True):
+            # 輸入區
+            s_tk = st.text_input("tk", value="700" if i==1 else "9888", key=f"tk_{i}", label_visibility="collapsed").upper()
+            s_pr = st.number_input("pr", value=616.0 if i==1 else 142.8, key=f"pr_{i}", label_visibility="collapsed")
+            s_bg = st.number_input("bg", value=123000.0 if i==1 else 100000.0, key=f"bg_{i}", label_visibility="collapsed")
+            s_rp = st.slider("rp", 1.0, 10.0, 5.0, 0.1, key=f"rp_{i}", label_visibility="collapsed")
+            s_ra = st.number_input("ra", value=3.0 if i==1 else 2.0, key=f"ra_{i}", label_visibility="collapsed")
+            
+            # 計算公式 (對標你的 Excel)
+            r_budget = s_bg * (s_rp / 100)
+            shares = int(s_bg / s_pr) if s_pr > 0 else 0
+            target = s_pr * (1 + (s_rp/100 * s_ra))
+            sl = s_pr * (1 - (s_rp/100))
+            
+            st.write("---")
+            # 輸出區
+            st.write(f"**{shares}** 股")
+            st.success(f"**{target:,.2f}**")
+            st.error(f"**{sl:,.2f}**")
+            
+            if st.button(f"📥 存入持倉 {i}", key=f"save_{i}", use_container_width=True):
+                supabase.table("trades").insert({
+                    "ticker": s_tk, "entry_price": s_pr, "stop_loss": sl,
+                    "qty": shares, "currency": "HKD", "risk_mkt": r_budget
+                }).execute()
+                st.rerun()
+
+st.divider()
+
+# --- 4. 底部層：實時監控 (Friendly Input) ---
+st.subheader("🔍 持倉管理與現價更新")
+if not df.empty:
     for i, row in df.iterrows():
-        with st.expander(f"📌 {row['Ticker']} - 成本: {row['Entry']}"):
-            col_a, col_b = st.columns(2)
-            cur_price = col_a.number_input(f"當前價格 ({row['Ticker']})", value=row['Entry'], key=f"cur_{i}")
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
+            c1.markdown(f"#### {row['ticker']}")
+            c1.caption(f"成本: {row['entry_price']}")
             
-            # 計算 Current R
-            denom = row['Entry'] - row['StopLoss']
-            curr_r = (cur_price - row['Entry']) / denom if denom != 0 else 0
+            # 友好的現價輸入
+            curr_p = c2.number_input(f"最新價格", value=float(row['entry_price']), key=f"live_{i}")
             
-            color = "green" if curr_r >= 0 else "red"
-            col_b.markdown(f"### 回報: :{color}[{curr_r:.2f} R]")
+            # 計算 R 數
+            dist = (curr_p - row['entry_price']) / (row['entry_price'] - row['stop_loss'])
+            color = "green" if dist >= 0 else "red"
+            c3.markdown(f"### 當前進度: :{color}[{dist:.2f} R]")
             
-            row['Current_Price'] = cur_price
-            row['Current_R'] = curr_r
-            updated_trades.append(row)
-    
-    df_final = pd.DataFrame(updated_trades)
-
-    # 繪製圖表
-    fig = px.bar(df_final, x='Ticker', y='Current_R', color='Current_R',
-                 color_continuous_scale=['red', 'gray', 'green'],
-                 title="持倉風險分佈 (R-Units)")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    if st.button("🗑️ 清空數據"):
-        st.session_state.trades = []
-        st.rerun()
+            if c4.button("🗑️", key=f"del_{i}"):
+                supabase.table("trades").delete().eq("id", row['id']).execute()
+                st.rerun()
 else:
-    st.info("目前沒有持倉紀錄。")
+    st.info("尚未有持倉數據，請從上方場景策劃器存入。")
