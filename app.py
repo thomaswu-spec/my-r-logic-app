@@ -27,47 +27,48 @@ def calc_trade_logic(p, b, r_pc, ra):
     tp_price = p * (1 + (r_pc/100 * ra))
     return {"r_amount": r_amount, "shares": shares, "sl_price": sl_price, "tp_price": tp_price}
 
-# --- 3. 多用戶登入系統 (Login System) ---
+# --- 3. 登入系統 (Sidebar) ---
+if 'user' not in st.session_state:
+    st.session_state['user'] = None
+
 st.sidebar.title("🔐 R-Logic 登入")
-auth_mode = st.sidebar.selectbox("模式", ["登入", "新用戶註冊"])
-email = st.sidebar.text_input("Email")
-password = st.sidebar.text_input("密碼", type="password")
+if st.session_state['user'] is None:
+    auth_mode = st.sidebar.selectbox("模式", ["登入", "新用戶註冊"])
+    email = st.sidebar.text_input("Email")
+    password = st.sidebar.text_input("密碼", type="password")
 
-user = None
-
-if auth_mode == "登入":
-    if st.sidebar.button("登入"):
-        try:
-            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-            st.session_state['user'] = res.user
-            st.sidebar.success("登入成功！")
-            st.rerun()
-        except: st.sidebar.error("登入失敗，請檢查 Email 或密碼")
+    if auth_mode == "登入":
+        if st.sidebar.button("確認登入", use_container_width=True):
+            try:
+                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                st.session_state['user'] = res.user
+                st.rerun()
+            except: st.sidebar.error("Email 或密碼錯誤")
+    else:
+        if st.sidebar.button("立即註冊", use_container_width=True):
+            try:
+                supabase.auth.sign_up({"email": email, "password": password})
+                st.sidebar.success("註冊成功！請檢查 Email 驗證（如已關閉驗證可直接登入）")
+            except: st.sidebar.error("註冊失敗")
 else:
-    if st.sidebar.button("註冊"):
-        try:
-            supabase.auth.sign_up({"email": email, "password": password})
-            st.sidebar.info("註冊信已寄出，請檢查 Email 驗證。")
-        except: st.sidebar.error("註冊失敗")
-
-# 檢查 Session 狀態
-if 'user' in st.session_state:
-    user = st.session_state['user']
+    st.sidebar.write(f"當前用戶: {st.session_state['user'].email}")
     if st.sidebar.button("登出"):
-        del st.session_state['user']
+        supabase.auth.sign_out()
+        st.session_state['user'] = None
         st.rerun()
 
-# --- 4. 主程式邏輯 (只有登入後才顯示) ---
+# --- 4. 主程式邏輯 ---
+user = st.session_state['user']
+
 if user:
-    st.title(f"🚀 {email.split('@')[0]} 的投資指揮中心")
+    st.title(f"🚀 {user.email.split('@')[0]} 的投資指揮中心")
 
     with st.container(border=True):
         st.subheader("📝 交易策劃")
-        col1, col2 = st.columns(2)
-        with col1: tk = st.text_input("🔍 代號", placeholder="例如: 700").upper()
-        with col2: trade_date = st.date_input("📅 日期", datetime.now())
+        c1, c2 = st.columns(2)
+        with c1: tk = st.text_input("🔍 代號", placeholder="例如: 700").upper()
+        with c2: trade_date = st.date_input("📅 日期", datetime.now())
         
-        # 抓取現價邏輯
         if tk and st.button("🔍 抓取現價", use_container_width=True):
             st.session_state['tmp_p'] = fetch_live_price(tk)
         
@@ -81,28 +82,32 @@ if user:
         res = calc_trade_logic(pr, bg, r_pc, r_ratio)
         if res:
             st.divider()
-            # 顯示計算結果
-            st.button("📝 紀錄在你的 portfolio", type="primary", use_container_width=True, on_click=lambda: 
-                supabase.table("trades").insert({
-                    "ticker": tk, "entry_price": pr, "stop_loss": res['sl_price'],
-                    "qty": res['shares'], "risk_mkt": res['r_amount'],
-                    "purchase_date": str(trade_date), "user_id": user.id # 儲存用戶 ID
-                }).execute()
-            )
+            # 【修復版代碼：紀錄按鈕】
+            if st.button("📝 紀錄在你的 portfolio", type="primary", use_container_width=True):
+                try:
+                    supabase.table("trades").insert({
+                        "ticker": tk, "entry_price": pr, "stop_loss": res['sl_price'],
+                        "qty": res['shares'], "risk_mkt": res['r_amount'],
+                        "purchase_date": str(trade_date), "user_id": user.id 
+                    }).execute()
+                    st.toast("✅ 紀錄成功！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"存檔失敗: {e}")
 
-    # --- 5. 持倉實時監控 (只睇返自己嘅 record) ---
+    # --- 5. 持倉監控 ---
     st.divider()
     st.header("📊 持倉實時監控 (Live Monitor)")
-    
-    # 呢度係關鍵：只 select 屬於目前 user.id 嘅資料
     db_res = supabase.table("trades").select("*").eq("user_id", user.id).execute()
     
     if db_res.data:
-        # (呢度保留之前嘅 HTML/CSS 橫向排版代碼，為咗簡潔省略，但記得功能要齊)
+        # 顯示表格 (此處簡化處理，你可以套用返之前嘅 HTML CSS 單行排版)
+        df = pd.DataFrame(db_res.data)
+        st.dataframe(df[['purchase_date', 'ticker', 'qty', 'entry_price', 'stop_loss']], use_container_width=True)
+        
         for trade in db_res.data:
-            # 修復咗嘅刪除掣 (拎走咗 size 參數)
-            if st.button(f"🗑️ 刪除 {trade['ticker']}", key=f"d_{trade['id']}"):
+            if st.button(f"🗑️ 刪除 {trade['ticker']} (ID:{trade['id']})", key=f"d_{trade['id']}"):
                 supabase.table("trades").delete().eq("id", trade['id']).execute()
                 st.rerun()
 else:
-    st.warning("👈 請喺側邊欄登入以查看你的 Portfolio。")
+    st.warning("👈 請喺左邊側邊欄登入以開始使用。")
