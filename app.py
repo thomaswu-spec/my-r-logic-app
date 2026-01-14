@@ -1,75 +1,71 @@
 import streamlit as st
-import math
-import pandas as pd # 這是處理表格的神器
+import pandas as pd
+import requests # 這是用來跟外界 API 溝通的工具
 
-st.set_page_config(page_title="R-Logic Pro", layout="wide")
+# --- 配置區 ---
+API_KEY = "Y054666acb08cd2dfb7de2023" # 👈 請在此處貼上你的 API Key
 
-# --- 1. 初始化筆記本 (Session State) ---
-# 如果筆記本裡還沒有「trades」這頁，我們就建立一個空的清單
+# 獲取匯率的函數
+def get_fx_rate(base, target):
+    try:
+        url = f"https://v6.exchangerate-api.com/v6/{API_KEY}/pair/{base}/{target}"
+        response = requests.get(url).json()
+        return response['conversion_rate']
+    except:
+        return 7.8 # 若 API 失敗，使用預設匯率 (USD/HKD)
+
+st.set_page_config(page_title="R-Logic Pro Global", layout="wide")
+
 if 'trades' not in st.session_state:
     st.session_state.trades = []
 
-st.title("🛡️ R-Logic 交易策劃與持倉管理")
+st.title("🌍 R-Logic 跨市場持倉管理")
 
-# --- 側邊欄：全局設定 ---
+# --- 側邊欄 ---
 with st.sidebar:
     st.header("⚙️ 全局設定")
-    equity = st.number_input("總資產 (Base Currency)", value=10000.0)
-    default_risk = st.slider("預設風險 %", 0.1, 5.0, 1.0, 0.1)
-    commission = st.number_input("每筆固定手續費", value=5.0)
-    slippage = st.number_input("預期滑價", value=0.01)
+    base_currency = st.selectbox("基準貨幣 (Base)", ["USD", "HKD"])
+    equity = st.number_input(f"總資產 ({base_currency})", value=100000.0)
+    
+    # 自動抓取匯率
+    if base_currency == "HKD":
+        usd_to_base = get_fx_rate("USD", "HKD")
+        st.write(f"目前匯率: 1 USD = {usd_to_base:.4f} HKD")
+    else:
+        usd_to_base = 1.0
 
-# --- 主畫面：交易策劃器 ---
-st.header("📝 第一步：策劃交易")
-c1, c2, c3 = st.columns(3)
-with c1: ticker = st.text_input("標的代號", value="AAPL").upper()
-with c2: entry = st.number_input("進場價", value=150.0)
-with c3: sl = st.number_input("止蝕價", value=145.0)
+# --- 交易策劃 ---
+st.header("📝 交易策劃")
+c1, c2, c3, c4 = st.columns(4)
+with c1: ticker = st.text_input("標的代號").upper()
+with c2: mkt_currency = st.selectbox("市場幣別", ["USD", "HKD"])
+with c3: entry = st.number_input("進場價", value=150.0)
+with c4: sl = st.number_input("止蝕價", value=145.0)
 
-# 核心計算
-r_amount = equity * (default_risk / 100)
-risk_per_share = (entry - sl) + slippage
+# 核心邏輯：換算 1R 為市場幣別
+# 1R = 總資產(Base) * 1% / 匯率
+r_in_base = equity * 0.01
+# 如果我的資產是 HKD，但買美股，計算時需要把 1R 換成 USD
+r_in_mkt = r_in_base / usd_to_base if (base_currency == "HKD" and mkt_currency == "USD") else r_in_base
 
 if entry > sl:
-    qty = math.floor((r_amount - commission) / risk_per_share)
-    total_cost = qty * entry
+    qty = int(r_in_mkt / (entry - sl))
+    st.success(f"建議股數: {qty} | 1R 風險 ({mkt_currency}): ${r_in_mkt:.2f}")
     
-    # 顯示計算結果
-    st.info(f"建議股數: {qty} | 預算: ${total_cost:.2f}")
+    if st.button("➕ 轉為持倉"):
+        st.session_state.trades.append({
+            "Ticker": ticker, "Currency": mkt_currency, 
+            "Qty": qty, "Entry": entry, "Risk_Mkt": r_in_mkt
+        })
+        st.rerun()
 
-    # --- 2. 轉為持倉按鈕 (User Story 實現) ---
-    if st.button("➕ 轉為持倉 (Add to Positions)"):
-        # 建立一筆交易紀錄
-        new_trade = {
-            "Ticker": ticker,
-            "Entry": entry,
-            "StopLoss": sl,
-            "Qty": qty,
-            "TotalCost": total_cost,
-            "RiskAmount": r_amount
-        }
-        # 把這筆紀錄寫進「白板」
-        st.session_state.trades.append(new_trade)
-        st.success(f"已將 {ticker} 加入持倉列表！")
-else:
-    st.error("止蝕價須低於進場價")
-
+# --- 持倉與總風險 ---
 st.divider()
-
-# --- 3. 持倉儀表板 (Dashboard MVP) ---
-st.header("📊 第二步：我的持倉 (Positions)")
-
-if len(st.session_state.trades) > 0:
-    # 把白板上的紀錄變成漂亮表格
+st.header("📊 全局持倉儀表板")
+if st.session_state.trades:
     df = pd.DataFrame(st.session_state.trades)
-    st.table(df) # 顯示表格
+    st.dataframe(df)
     
-    # 計算全域指標 (FS 3.B)
-    total_open_risk = df["RiskAmount"].sum()
-    st.metric("當前總風險 (Total Open Risk)", f"${total_open_risk:.2f}")
-    
-    if st.button("🗑️ 清空所有紀錄"):
-        st.session_state.trades = []
-        st.rerun() # 重新整理頁面
-else:
-    st.write("目前沒有持倉紀錄，請從上方新增。")
+    # FS 3.B：計算 Total Open Risk
+    total_risk = sum(t['Risk_Mkt'] * (usd_to_base if t['Currency'] == "USD" and base_currency == "HKD" else 1) for t in st.session_state.trades)
+    st.metric(f"當前總風險 (Total Open Risk in {base_currency})", f"${total_risk:.2f}")
